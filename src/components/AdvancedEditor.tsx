@@ -15,7 +15,7 @@ const slashCommands = [
   { label: 'Table', insert: '| Name | Age |\n|------|-----|\n|      |     |\n' },
 ]
 
-interface EditorProps {
+export interface EditorProps {
   value: string
   onChange: (val: string) => void
   format: 'markdown' | 'other'
