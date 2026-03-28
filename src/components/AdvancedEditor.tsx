@@ -25,129 +25,107 @@ export interface EditorProps {
   height?: string
 }
 
-// ── Markdown segment parser ───────────────────────────────────────────────────
+// ── Context menu types ────────────────────────────────────────────────────────
 
-type Segment =
-  | { type: 'text';  content: string }
-  | { type: 'table'; lines: string[]; startLine: number }
-
-function splitSegments(md: string): Segment[] {
-  const lines    = md.split('\n')
-  const segments: Segment[] = []
-  let i          = 0
-  let textStart  = 0
-
-  const flushText = (end: number) => {
-    const content = lines.slice(textStart, end).join('\n')
-    if (content.trim()) segments.push({ type: 'text', content })
-  }
-
-  while (i < lines.length) {
-    const isTableRow  = (l: string) => l.trim().startsWith('|')
-    const isSeparator = (l: string) => /^\|[-:\s|]+\|/.test(l.trim())
-
-    if (isTableRow(lines[i]) && i + 1 < lines.length && isSeparator(lines[i + 1])) {
-      flushText(i)
-      const startLine = i
-      while (i < lines.length && isTableRow(lines[i])) i++
-      segments.push({ type: 'table', lines: lines.slice(startLine, i), startLine })
-      textStart = i
-    } else {
-      i++
-    }
-  }
-  flushText(lines.length)
-  return segments
+interface CtxMenu {
+  x:          number
+  y:          number
+  lineIdx:    number   // 0-indexed line in document
+  colIdx:     number   // 0-indexed column in table
+  isHeader:   boolean
+  isSep:      boolean
+  isDataRow:  boolean
+  tableStart: number
+  tableEnd:   number
 }
 
-// ── Interactive table rendered in preview pane ────────────────────────────────
+// ── Table helpers ─────────────────────────────────────────────────────────────
 
-const btnStyle: React.CSSProperties = {
-  padding: '1px 5px', fontSize: 11, lineHeight: 1,
-  background: '#fff', border: '1px solid #ccc', borderRadius: 3,
-  cursor: 'pointer', color: '#555',
+const isTableLine = (l: string) => l.trim().startsWith('|')
+const isSepLine   = (l: string) => /^\|[\s\-:|]+\|/.test(l.trim())
+
+function getTableBounds(lines: string[], lineIdx: number) {
+  let start = lineIdx
+  while (start > 0 && isTableLine(lines[start - 1])) start--
+  let end = lineIdx
+  while (end < lines.length - 1 && isTableLine(lines[end + 1])) end++
+  return { start, end }
 }
 
-interface TableOps {
-  addColumn:    (colIdx: number, startLine: number, endLine: number) => void
-  deleteColumn: (colIdx: number, startLine: number, endLine: number) => void
-  addRow:       (lineIdx: number) => void
-  deleteRow:    (lineIdx: number) => void
+function colIndexAt(lineContent: string, monacoColumn: number) {
+  const before = lineContent.slice(0, monacoColumn - 1)
+  return Math.max(0, (before.match(/\|/g) ?? []).length - 1)
 }
 
-function InteractiveTable({ tableLines, startLine, ops }: {
-  tableLines: string[]
-  startLine:  number
-  ops:        TableOps
+function formatTable(tableLines: string[]): string[] {
+  const parseRow = (l: string) => l.split('|').slice(1, -1).map(c => c.trim())
+  const dataLines = tableLines.filter((_, i) => i !== 1)
+  const rows      = dataLines.map(parseRow)
+  const colCount  = Math.max(...rows.map(r => r.length))
+  const widths    = Array.from({ length: colCount }, (_, ci) =>
+    Math.max(3, ...rows.map(r => (r[ci] ?? '').length))
+  )
+  return tableLines.map((line, i) =>
+    i === 1
+      ? '| ' + widths.map(w => '-'.repeat(w)).join(' | ') + ' |'
+      : '| ' + parseRow(line).map((c, ci) => c.padEnd(widths[ci] ?? 0)).join(' | ') + ' |'
+  )
+}
+
+// ── Context menu UI ───────────────────────────────────────────────────────────
+
+const menuItemStyle: React.CSSProperties = {
+  padding: '6px 14px', cursor: 'pointer', fontSize: 13,
+  whiteSpace: 'nowrap', color: '#1a1a1a',
+}
+const menuDivStyle: React.CSSProperties = {
+  height: 1, background: '#e5e7eb', margin: '3px 0',
+}
+
+function ContextMenu({ menu, onAction, onClose }: {
+  menu:     CtxMenu
+  onAction: (action: string) => void
+  onClose:  () => void
 }) {
-  const [hoveredCol, setHoveredCol] = useState<number | null>(null)
-  const [hoveredRow, setHoveredRow] = useState<number | null>(null)
+  useEffect(() => {
+    const handler = () => onClose()
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [onClose])
 
-  const parseRow = (line: string) => line.split('|').slice(1, -1).map(c => c.trim())
-  const headers  = parseRow(tableLines[0])
-  const dataRows = tableLines.slice(2).map(parseRow)
-  const endLine  = startLine + tableLines.length - 1
-
-  const thStyle: React.CSSProperties = {
-    border: '1px solid #d1d5db', padding: '6px 10px',
-    background: '#f3f4f6', fontWeight: 600,
-    position: 'relative', userSelect: 'none',
-  }
-  const tdStyle: React.CSSProperties = {
-    border: '1px solid #d1d5db', padding: '6px 10px',
-    position: 'relative',
-  }
+  const item = (label: string, action: string) => (
+    <div
+      key={action}
+      style={menuItemStyle}
+      onMouseDown={(e) => { e.stopPropagation(); onAction(action); onClose() }}
+      onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+    >
+      {label}
+    </div>
+  )
 
   return (
-    <div style={{ overflowX: 'auto', marginBottom: 16 }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 14 }}>
-        <thead>
-          <tr>
-            {headers.map((h, colIdx) => (
-              <th
-                key={colIdx}
-                style={thStyle}
-                onMouseEnter={() => setHoveredCol(colIdx)}
-                onMouseLeave={() => setHoveredCol(null)}
-              >
-                {h}
-                {hoveredCol === colIdx && (
-                  <div style={{ position: 'absolute', top: 2, right: 2, display: 'flex', gap: 2, zIndex: 10 }}>
-                    <button style={btnStyle} title="Add column after" onClick={() => ops.addColumn(colIdx, startLine, endLine)}>+col</button>
-                    <button style={btnStyle} title="Delete this column" onClick={() => ops.deleteColumn(colIdx, startLine, endLine)}>−col</button>
-                  </div>
-                )}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {dataRows.map((row, rowIdx) => {
-            const lineIdx = startLine + 2 + rowIdx // +header +separator
-            return (
-              <tr
-                key={rowIdx}
-                style={{ background: rowIdx % 2 === 0 ? '#fff' : '#f9fafb' }}
-                onMouseEnter={() => setHoveredRow(rowIdx)}
-                onMouseLeave={() => setHoveredRow(null)}
-              >
-                {row.map((cell, colIdx) => (
-                  <td key={colIdx} style={tdStyle}>{cell}</td>
-                ))}
-                {/* Row controls appear as an extra cell on hover */}
-                <td style={{ ...tdStyle, border: 'none', padding: '0 4px', whiteSpace: 'nowrap', background: 'transparent' }}>
-                  {hoveredRow === rowIdx && (
-                    <div style={{ display: 'flex', gap: 2 }}>
-                      <button style={btnStyle} title="Add row below" onClick={() => ops.addRow(lineIdx)}>+row</button>
-                      <button style={btnStyle} title="Delete this row" onClick={() => ops.deleteRow(lineIdx)}>−row</button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+    <div
+      style={{
+        position: 'fixed', top: menu.y, left: menu.x, zIndex: 9999,
+        background: '#fff', border: '1px solid #d1d5db',
+        borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+        minWidth: 180, padding: '4px 0',
+      }}
+      onMouseDown={e => e.stopPropagation()}
+    >
+      {/* Column actions — always show when in a table */}
+      {item('Add column to the left',  'col-add-left')}
+      {item('Add column to the right', 'col-add-right')}
+      {item('Delete column',           'col-delete')}
+      <div style={menuDivStyle} />
+      {/* Row actions — only for data rows */}
+      {(menu.isDataRow) && item('Add row above', 'row-add-above')}
+      {(menu.isDataRow) && item('Add row below', 'row-add-below')}
+      {(menu.isDataRow) && item('Delete row',    'row-delete')}
+      {menu.isDataRow && <div style={menuDivStyle} />}
+      {item('Format / align table', 'format')}
     </div>
   )
 }
@@ -157,6 +135,8 @@ function InteractiveTable({ tableLines, startLine, ops }: {
 export default function AdvancedEditor({ value, onChange, format, height = '500px' }: EditorProps) {
   const [markdown, setMarkdown] = useState(value)
   const [mode, setMode]         = useState<Mode>('both')
+  const [ctxMenu, setCtxMenu]   = useState<CtxMenu | null>(null)
+
   const monacoRef  = useRef<any>(null)
   const disposable = useRef<any>(null)
 
@@ -193,7 +173,7 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
   const handleEditorMount = (editor: any, monaco: any) => {
     monacoRef.current = editor
 
-    // Register custom completion provider for @ and / only
+    // ── Completions: @ mention + /slash only ──────────────────────────────
     disposable.current = monaco.languages.registerCompletionItemProvider('markdown', {
       triggerCharacters: ['@', '/'],
       provideCompletionItems: (model: any, position: any) => {
@@ -202,7 +182,6 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
           endLineNumber:   position.lineNumber, endColumn: position.column,
         })
 
-        // @mention → inserts `@name`
         const mentionMatch = lineBefore.match(/@([\w.]*)$/)
         if (mentionMatch) {
           const range = {
@@ -212,16 +191,10 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
           return {
             suggestions: mentionList
               .filter(m => m.toLowerCase().startsWith(mentionMatch[1].toLowerCase()))
-              .map(m => ({
-                label: `@${m}`,
-                kind:  monaco.languages.CompletionItemKind.User,
-                insertText: `\`@${m}\` `,
-                range,
-              })),
+              .map(m => ({ label: `@${m}`, kind: monaco.languages.CompletionItemKind.User, insertText: `\`@${m}\` `, range })),
           }
         }
 
-        // /slash command
         const slashMatch = lineBefore.match(/\/([\w]*)$/)
         if (slashMatch) {
           const range = {
@@ -231,12 +204,7 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
           return {
             suggestions: slashCommands
               .filter(c => c.label.toLowerCase().includes(slashMatch[1].toLowerCase()))
-              .map(c => ({
-                label: c.label,
-                kind:  monaco.languages.CompletionItemKind.Snippet,
-                insertText: c.insert,
-                range,
-              })),
+              .map(c => ({ label: c.label, kind: monaco.languages.CompletionItemKind.Snippet, insertText: c.insert, range })),
           }
         }
 
@@ -244,93 +212,136 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
       },
     })
 
-    // Force-trigger suggest on '/' — Monaco markdown mode doesn't fire triggerCharacters for it
-    editor.onDidChangeModelContent((e: any) => {
-      if (e.isFlush) return
-      const text = e.changes[0]?.text ?? ''
-      if (text.includes('/')) {
+    // ── Slash trigger fix: use editor.onKeyDown ───────────────────────────
+    editor.onKeyDown((e: any) => {
+      if (e.browserEvent?.key === '/') {
         setTimeout(() => editor.trigger('keyboard', 'editor.action.triggerSuggest', {}), 50)
       }
     })
+
+    // ── Custom right-click context menu for table operations ──────────────
+    editor.onContextMenu((e: any) => {
+      const position = e.target?.position
+      if (!position) return
+      e.event.preventDefault()
+      e.event.stopPropagation()
+
+      const model   = editor.getModel()
+      const lines   = model.getValue().split('\n')
+      const lineIdx = position.lineNumber - 1
+
+      if (!isTableLine(lines[lineIdx] ?? '')) return
+
+      const { start, end } = getTableBounds(lines, lineIdx)
+      const isHeader  = lineIdx === start
+      const isSep     = isSepLine(lines[lineIdx])
+      const isDataRow = !isHeader && !isSep
+
+      setCtxMenu({
+        x: e.event.browserEvent.clientX,
+        y: e.event.browserEvent.clientY,
+        lineIdx,
+        colIdx:     colIndexAt(lines[lineIdx], position.column),
+        isHeader,
+        isSep,
+        isDataRow,
+        tableStart: start,
+        tableEnd:   end,
+      })
+    })
   }
 
-  // ── Table operations (operate on raw markdown via Monaco model) ───────────
+  // ── Table operations ──────────────────────────────────────────────────────
 
   const getModel = () => monacoRef.current?.getModel()
 
-  const addColumn = useCallback((colIdx: number, startLine: number, endLine: number) => {
+  const handleTableAction = useCallback((action: string) => {
+    if (!ctxMenu) return
     const model = getModel(); if (!model) return
     const lines = model.getValue().split('\n')
-    for (let i = startLine; i <= endLine; i++) {
-      if (!lines[i].includes('|')) continue
-      const cells = lines[i].split('|')
-      cells.splice(colIdx + 2, 0, i === startLine + 1 ? '---' : '   ')
-      lines[i] = cells.join('|')
+    const { lineIdx, colIdx, tableStart, tableEnd } = ctxMenu
+
+    const applyToTable = (fn: (cells: string[], lineI: number) => string[]) => {
+      for (let i = tableStart; i <= tableEnd; i++) {
+        if (!isTableLine(lines[i])) continue
+        const cells = lines[i].split('|')
+        lines[i] = fn(cells, i).join('|')
+      }
     }
-    model.setValue(lines.join('\n'))
-  }, [])
 
-  const deleteColumn = useCallback((colIdx: number, startLine: number, endLine: number) => {
-    const model = getModel(); if (!model) return
-    const lines = model.getValue().split('\n')
-    for (let i = startLine; i <= endLine; i++) {
-      if (!lines[i].includes('|')) continue
-      const cells = lines[i].split('|')
-      if (cells.length > 3) cells.splice(colIdx + 1, 1)
-      lines[i] = cells.join('|')
+    switch (action) {
+      case 'col-add-left':
+        applyToTable((cells, i) => {
+          cells.splice(colIdx + 1, 0, i === tableStart + 1 ? '---' : '   ')
+          return cells
+        })
+        break
+
+      case 'col-add-right':
+        applyToTable((cells, i) => {
+          cells.splice(colIdx + 2, 0, i === tableStart + 1 ? '---' : '   ')
+          return cells
+        })
+        break
+
+      case 'col-delete':
+        applyToTable((cells) => {
+          if (cells.length > 3) cells.splice(colIdx + 1, 1)
+          return cells
+        })
+        break
+
+      case 'row-add-above': {
+        const ref   = lines[lineIdx].split('|').slice(1, -1)
+        const blank = '| ' + ref.map(() => '   ').join(' | ') + ' |'
+        lines.splice(lineIdx, 0, blank)
+        break
+      }
+
+      case 'row-add-below': {
+        const ref   = lines[lineIdx].split('|').slice(1, -1)
+        const blank = '| ' + ref.map(() => '   ').join(' | ') + ' |'
+        lines.splice(lineIdx + 1, 0, blank)
+        break
+      }
+
+      case 'row-delete':
+        if (lineIdx > tableStart + 1) lines.splice(lineIdx, 1)
+        break
+
+      case 'format': {
+        const tableLines    = lines.slice(tableStart, tableEnd + 1)
+        const formatted     = formatTable(tableLines)
+        lines.splice(tableStart, tableEnd - tableStart + 1, ...formatted)
+        break
+      }
     }
-    model.setValue(lines.join('\n'))
-  }, [])
 
-  const addRow = useCallback((lineIdx: number) => {
-    const model = getModel(); if (!model) return
-    const lines   = model.getValue().split('\n')
-    const newLine = '| ' + lines[lineIdx].split('|').slice(1, -1).map(() => '   ').join(' | ') + ' |'
-    lines.splice(lineIdx + 1, 0, newLine)
     model.setValue(lines.join('\n'))
-  }, [])
-
-  const deleteRow = useCallback((lineIdx: number) => {
-    const model = getModel(); if (!model) return
-    const lines = model.getValue().split('\n')
-    if (lineIdx < 2 || lineIdx >= lines.length) return
-    lines.splice(lineIdx, 1)
-    model.setValue(lines.join('\n'))
-  }, [])
-
-  const tableOps: TableOps = { addColumn, deleteColumn, addRow, deleteRow }
+  }, [ctxMenu])
 
   // ── Monaco options ────────────────────────────────────────────────────────
 
   const monacoOptions = {
-    wordWrap:                   'on'   as const,
+    wordWrap:                   'on'  as const,
     minimap:                    { enabled: false },
     largeFileOptimizations:     true,
     automaticLayout:            true,
     contextmenu:                false,
     quickSuggestions:           false,
     suggestOnTriggerCharacters: true,
-    wordBasedSuggestions:       'off'  as const,
+    wordBasedSuggestions:       'off' as const,
     parameterHints:             { enabled: false },
     snippetSuggestions:         'none' as const,
   }
 
-  // ── Preview with interactive tables ──────────────────────────────────────
+  // ── Preview pane ──────────────────────────────────────────────────────────
 
-  const previewContent = useMemo(() => {
-    const segments = splitSegments(markdown)
-    return (
-      <div style={{ padding: 16, height, overflow: 'auto', border: '1px solid #eee', borderRadius: 8 }}>
-        {segments.map((seg, idx) =>
-          seg.type === 'text' ? (
-            <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]}>{seg.content}</ReactMarkdown>
-          ) : (
-            <InteractiveTable key={idx} tableLines={seg.lines} startLine={seg.startLine} ops={tableOps} />
-          )
-        )}
-      </div>
-    )
-  }, [markdown, height, tableOps])
+  const previewPane = useMemo(() => (
+    <div style={{ padding: 16, border: '1px solid #eee', borderRadius: 8, height, overflow: 'auto' }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+    </div>
+  ), [markdown, height])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -344,7 +355,7 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
           <button onClick={() => setMode('both')}>Both</button>
         </div>
 
-        <div style={{ display: 'flex', gap: 0 }}>
+        <div style={{ display: 'flex' }}>
           {(mode === 'edit' || isBoth) && (
             <div style={{ width: isBoth ? '50%' : '100%', flexShrink: 0 }} onPaste={handlePaste}>
               <MonacoEditor
@@ -361,10 +372,19 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
 
           {(mode === 'preview' || isBoth) && (
             <div style={{ width: isBoth ? '50%' : '100%', flexShrink: 0 }}>
-              {previewContent}
+              {previewPane}
             </div>
           )}
         </div>
+
+        {/* Custom context menu */}
+        {ctxMenu && (
+          <ContextMenu
+            menu={ctxMenu}
+            onAction={handleTableAction}
+            onClose={() => setCtxMenu(null)}
+          />
+        )}
       </div>
     )
   }
@@ -401,7 +421,6 @@ Paste an image here or try @mention someone.`
   return (
     <div style={{ padding: 24 }}>
       <h1>Advanced Markdown Editor Demo</h1>
-
       <AdvancedEditor value={content} onChange={setContent} format="markdown" height="600px" />
 
       <div style={{ marginTop: 24 }}>
