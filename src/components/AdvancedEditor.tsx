@@ -1,18 +1,18 @@
 'use client'
 
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import MonacoEditor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-export const mentionList = ['jason.h', 'alice', 'bob', 'charlie', 'eve', 'david']
+export const mentionList   = ['jason.h', 'alice', 'bob', 'charlie', 'eve', 'david']
 export const slashCommands = [
-  { label: 'Heading 1',  insert: '# '                                                              },
-  { label: 'Heading 2',  insert: '## '                                                             },
-  { label: 'Heading 3',  insert: '### '                                                            },
-  { label: 'Bold',       insert: '**bold**'                                                        },
-  { label: 'Italic',     insert: '*italic*'                                                        },
-  { label: 'Code block', insert: '```\n\n```'                                                      },
+  { label: 'Heading 1',  insert: '# '        },
+  { label: 'Heading 2',  insert: '## '       },
+  { label: 'Heading 3',  insert: '### '      },
+  { label: 'Bold',       insert: '**bold**'  },
+  { label: 'Italic',     insert: '*italic*'  },
+  { label: 'Code block', insert: '```\n\n```'},
   { label: 'Table',      insert: '| Header1 | Header2 |\n|---------|---------|\n|         |         |\n' },
 ]
 
@@ -25,31 +25,143 @@ export interface EditorProps {
   height?: string
 }
 
-export default function AdvancedEditor({ value, onChange, format, height = '500px' }: EditorProps) {
-  const [markdown, setMarkdown]           = useState(value)
-  const [mode, setMode]                   = useState<Mode>('both')
-  const [hoveredHeader, setHoveredHeader] = useState<number | null>(null)
-  const [hoveredRow, setHoveredRow]       = useState<number | null>(null)
-  const [colWidths, setColWidths]         = useState<number[]>([])
-  const [editingCell, setEditingCell]     = useState<{ row: number; col: number } | null>(null)
-  const [cellValue, setCellValue]         = useState('')
+// ── Markdown segment parser ───────────────────────────────────────────────────
 
+type Segment =
+  | { type: 'text';  content: string }
+  | { type: 'table'; lines: string[]; startLine: number }
+
+function splitSegments(md: string): Segment[] {
+  const lines    = md.split('\n')
+  const segments: Segment[] = []
+  let i          = 0
+  let textStart  = 0
+
+  const flushText = (end: number) => {
+    const content = lines.slice(textStart, end).join('\n')
+    if (content.trim()) segments.push({ type: 'text', content })
+  }
+
+  while (i < lines.length) {
+    const isTableRow  = (l: string) => l.trim().startsWith('|')
+    const isSeparator = (l: string) => /^\|[-:\s|]+\|/.test(l.trim())
+
+    if (isTableRow(lines[i]) && i + 1 < lines.length && isSeparator(lines[i + 1])) {
+      flushText(i)
+      const startLine = i
+      while (i < lines.length && isTableRow(lines[i])) i++
+      segments.push({ type: 'table', lines: lines.slice(startLine, i), startLine })
+      textStart = i
+    } else {
+      i++
+    }
+  }
+  flushText(lines.length)
+  return segments
+}
+
+// ── Interactive table rendered in preview pane ────────────────────────────────
+
+const btnStyle: React.CSSProperties = {
+  padding: '1px 5px', fontSize: 11, lineHeight: 1,
+  background: '#fff', border: '1px solid #ccc', borderRadius: 3,
+  cursor: 'pointer', color: '#555',
+}
+
+interface TableOps {
+  addColumn:    (colIdx: number, startLine: number, endLine: number) => void
+  deleteColumn: (colIdx: number, startLine: number, endLine: number) => void
+  addRow:       (lineIdx: number) => void
+  deleteRow:    (lineIdx: number) => void
+}
+
+function InteractiveTable({ tableLines, startLine, ops }: {
+  tableLines: string[]
+  startLine:  number
+  ops:        TableOps
+}) {
+  const [hoveredCol, setHoveredCol] = useState<number | null>(null)
+  const [hoveredRow, setHoveredRow] = useState<number | null>(null)
+
+  const parseRow = (line: string) => line.split('|').slice(1, -1).map(c => c.trim())
+  const headers  = parseRow(tableLines[0])
+  const dataRows = tableLines.slice(2).map(parseRow)
+  const endLine  = startLine + tableLines.length - 1
+
+  const thStyle: React.CSSProperties = {
+    border: '1px solid #d1d5db', padding: '6px 10px',
+    background: '#f3f4f6', fontWeight: 600,
+    position: 'relative', userSelect: 'none',
+  }
+  const tdStyle: React.CSSProperties = {
+    border: '1px solid #d1d5db', padding: '6px 10px',
+    position: 'relative',
+  }
+
+  return (
+    <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+      <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 14 }}>
+        <thead>
+          <tr>
+            {headers.map((h, colIdx) => (
+              <th
+                key={colIdx}
+                style={thStyle}
+                onMouseEnter={() => setHoveredCol(colIdx)}
+                onMouseLeave={() => setHoveredCol(null)}
+              >
+                {h}
+                {hoveredCol === colIdx && (
+                  <div style={{ position: 'absolute', top: 2, right: 2, display: 'flex', gap: 2, zIndex: 10 }}>
+                    <button style={btnStyle} title="Add column after" onClick={() => ops.addColumn(colIdx, startLine, endLine)}>+col</button>
+                    <button style={btnStyle} title="Delete this column" onClick={() => ops.deleteColumn(colIdx, startLine, endLine)}>−col</button>
+                  </div>
+                )}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {dataRows.map((row, rowIdx) => {
+            const lineIdx = startLine + 2 + rowIdx // +header +separator
+            return (
+              <tr
+                key={rowIdx}
+                style={{ background: rowIdx % 2 === 0 ? '#fff' : '#f9fafb' }}
+                onMouseEnter={() => setHoveredRow(rowIdx)}
+                onMouseLeave={() => setHoveredRow(null)}
+              >
+                {row.map((cell, colIdx) => (
+                  <td key={colIdx} style={tdStyle}>{cell}</td>
+                ))}
+                {/* Row controls appear as an extra cell on hover */}
+                <td style={{ ...tdStyle, border: 'none', padding: '0 4px', whiteSpace: 'nowrap', background: 'transparent' }}>
+                  {hoveredRow === rowIdx && (
+                    <div style={{ display: 'flex', gap: 2 }}>
+                      <button style={btnStyle} title="Add row below" onClick={() => ops.addRow(lineIdx)}>+row</button>
+                      <button style={btnStyle} title="Delete this row" onClick={() => ops.deleteRow(lineIdx)}>−row</button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Main editor component ─────────────────────────────────────────────────────
+
+export default function AdvancedEditor({ value, onChange, format, height = '500px' }: EditorProps) {
+  const [markdown, setMarkdown] = useState(value)
+  const [mode, setMode]         = useState<Mode>('both')
   const monacoRef  = useRef<any>(null)
   const disposable = useRef<any>(null)
 
   useEffect(() => setMarkdown(value), [value])
   useEffect(() => () => disposable.current?.dispose(), [])
-
-  // Initialize column widths whenever markdown changes
-  useEffect(() => {
-    if (format !== 'markdown') return
-    const lines = monacoRef.current?.getModel()?.getValue().split('\n') || markdown.split('\n')
-    const firstTableLine = lines.find((l: string) => l.includes('|'))
-    if (firstTableLine) {
-      const cols = firstTableLine.split('|').length - 2
-      setColWidths((prev) => (prev.length === cols ? prev : Array(cols).fill(100)))
-    }
-  }, [format, markdown])
 
   const handleEditorChange = (val?: string) => {
     const v = val || ''
@@ -60,8 +172,7 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
   // Paste image → Base64 inline
   const handlePaste = (e: React.ClipboardEvent) => {
     if (format !== 'markdown') return
-    const items = e.clipboardData.items
-    for (const item of items) {
+    for (const item of e.clipboardData.items) {
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile()
         if (!file) continue
@@ -69,10 +180,8 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
         reader.onload = () => {
           const editor = monacoRef.current
           if (!editor) return
-          const selection = editor.getSelection()!
-          editor.executeEdits('', [
-            { range: selection, text: `![pasted_image](${reader.result})`, forceMoveMarkers: true },
-          ])
+          const sel = editor.getSelection()!
+          editor.executeEdits('', [{ range: sel, text: `![pasted_image](${reader.result})`, forceMoveMarkers: true }])
         }
         reader.readAsDataURL(file)
         e.preventDefault()
@@ -84,33 +193,29 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
   const handleEditorMount = (editor: any, monaco: any) => {
     monacoRef.current = editor
 
-    // Custom completion provider for @ and / — all default suggestions disabled
+    // Register custom completion provider for @ and / only
     disposable.current = monaco.languages.registerCompletionItemProvider('markdown', {
       triggerCharacters: ['@', '/'],
       provideCompletionItems: (model: any, position: any) => {
         const lineBefore = model.getValueInRange({
-          startLineNumber: position.lineNumber,
-          startColumn: 1,
-          endLineNumber: position.lineNumber,
-          endColumn: position.column,
+          startLineNumber: position.lineNumber, startColumn: 1,
+          endLineNumber:   position.lineNumber, endColumn: position.column,
         })
 
-        // @mention → inserts <mention:name>
+        // @mention → inserts `@name`
         const mentionMatch = lineBefore.match(/@([\w.]*)$/)
         if (mentionMatch) {
           const range = {
-            startLineNumber: position.lineNumber,
-            endLineNumber: position.lineNumber,
-            startColumn: position.column - mentionMatch[0].length,
-            endColumn: position.column,
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: position.column - mentionMatch[0].length, endColumn: position.column,
           }
           return {
             suggestions: mentionList
               .filter(m => m.toLowerCase().startsWith(mentionMatch[1].toLowerCase()))
               .map(m => ({
                 label: `@${m}`,
-                kind: monaco.languages.CompletionItemKind.User,
-                insertText: `<mention:${m}> `,
+                kind:  monaco.languages.CompletionItemKind.User,
+                insertText: `\`@${m}\` `,
                 range,
               })),
           }
@@ -120,17 +225,15 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
         const slashMatch = lineBefore.match(/\/([\w]*)$/)
         if (slashMatch) {
           const range = {
-            startLineNumber: position.lineNumber,
-            endLineNumber: position.lineNumber,
-            startColumn: position.column - slashMatch[0].length,
-            endColumn: position.column,
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: position.column - slashMatch[0].length, endColumn: position.column,
           }
           return {
             suggestions: slashCommands
               .filter(c => c.label.toLowerCase().includes(slashMatch[1].toLowerCase()))
               .map(c => ({
                 label: c.label,
-                kind: monaco.languages.CompletionItemKind.Snippet,
+                kind:  monaco.languages.CompletionItemKind.Snippet,
                 insertText: c.insert,
                 range,
               })),
@@ -141,124 +244,100 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
       },
     })
 
-    // Monaco markdown mode doesn't reliably fire triggerCharacters for '/'.
-    // Manually trigger the suggest widget when '/' is typed.
+    // Force-trigger suggest on '/' — Monaco markdown mode doesn't fire triggerCharacters for it
     editor.onDidChangeModelContent((e: any) => {
-      if (e.changes[0]?.text === '/') {
+      if (e.isFlush) return
+      const text = e.changes[0]?.text ?? ''
+      if (text.includes('/')) {
         setTimeout(() => editor.trigger('keyboard', 'editor.action.triggerSuggest', {}), 50)
       }
     })
   }
 
-  // ── Table operations ──────────────────────────────────────────────────────
+  // ── Table operations (operate on raw markdown via Monaco model) ───────────
 
   const getModel = () => monacoRef.current?.getModel()
 
-  const addColumn = (colIndex: number) => {
-    const model = getModel(); if (!model) return
-    const newLines = model.getValue().split('\n').map((line: string) => {
-      if (!line.includes('|')) return line
-      const cells = line.split('|')
-      cells.splice(colIndex + 1, 0, ' ')
-      return cells.join('|')
-    })
-    model.setValue(newLines.join('\n'))
-  }
-
-  const deleteColumn = (colIndex: number) => {
-    const model = getModel(); if (!model) return
-    const newLines = model.getValue().split('\n').map((line: string) => {
-      if (!line.includes('|')) return line
-      const cells = line.split('|')
-      if (cells.length > 2) cells.splice(colIndex + 1, 1)
-      return cells.join('|')
-    })
-    model.setValue(newLines.join('\n'))
-  }
-
-  const addRow = (rowIndex: number) => {
+  const addColumn = useCallback((colIdx: number, startLine: number, endLine: number) => {
     const model = getModel(); if (!model) return
     const lines = model.getValue().split('\n')
-    if (rowIndex >= lines.length || !lines[rowIndex].includes('|')) return
-    const newLine = '| ' + lines[rowIndex].split('|').slice(1, -1).map(() => ' ').join(' | ') + ' |'
-    lines.splice(rowIndex + 1, 0, newLine)
-    model.setValue(lines.join('\n'))
-  }
-
-  const deleteRow = (rowIndex: number) => {
-    const model = getModel(); if (!model) return
-    const lines = model.getValue().split('\n')
-    if (rowIndex < 2 || rowIndex >= lines.length) return
-    lines.splice(rowIndex, 1)
-    model.setValue(lines.join('\n'))
-  }
-
-  const startDrag = (index: number, e: React.MouseEvent) => {
-    e.preventDefault()
-    const startX     = e.clientX
-    const startWidth = colWidths[index]
-    const onMouseMove = (ev: MouseEvent) => {
-      setColWidths(prev => {
-        const w = [...prev]
-        w[index] = Math.max(50, startWidth + ev.clientX - startX)
-        return w
-      })
+    for (let i = startLine; i <= endLine; i++) {
+      if (!lines[i].includes('|')) continue
+      const cells = lines[i].split('|')
+      cells.splice(colIdx + 2, 0, i === startLine + 1 ? '---' : '   ')
+      lines[i] = cells.join('|')
     }
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-    }
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-  }
+    model.setValue(lines.join('\n'))
+  }, [])
 
-  const handleCellClick = (row: number, col: number, val: string) => {
-    setEditingCell({ row, col })
-    setCellValue(val)
-  }
-
-  const saveCellValue = () => {
-    if (!editingCell) return
+  const deleteColumn = useCallback((colIdx: number, startLine: number, endLine: number) => {
     const model = getModel(); if (!model) return
     const lines = model.getValue().split('\n')
-    const cells = lines[editingCell.row].split('|')
-    cells[editingCell.col + 1] = cellValue
-    lines[editingCell.row] = cells.join('|')
+    for (let i = startLine; i <= endLine; i++) {
+      if (!lines[i].includes('|')) continue
+      const cells = lines[i].split('|')
+      if (cells.length > 3) cells.splice(colIdx + 1, 1)
+      lines[i] = cells.join('|')
+    }
     model.setValue(lines.join('\n'))
-    setEditingCell(null)
-  }
+  }, [])
 
-  // ── Monaco editor options ─────────────────────────────────────────────────
+  const addRow = useCallback((lineIdx: number) => {
+    const model = getModel(); if (!model) return
+    const lines   = model.getValue().split('\n')
+    const newLine = '| ' + lines[lineIdx].split('|').slice(1, -1).map(() => '   ').join(' | ') + ' |'
+    lines.splice(lineIdx + 1, 0, newLine)
+    model.setValue(lines.join('\n'))
+  }, [])
+
+  const deleteRow = useCallback((lineIdx: number) => {
+    const model = getModel(); if (!model) return
+    const lines = model.getValue().split('\n')
+    if (lineIdx < 2 || lineIdx >= lines.length) return
+    lines.splice(lineIdx, 1)
+    model.setValue(lines.join('\n'))
+  }, [])
+
+  const tableOps: TableOps = { addColumn, deleteColumn, addRow, deleteRow }
+
+  // ── Monaco options ────────────────────────────────────────────────────────
 
   const monacoOptions = {
-    wordWrap:                   'on' as const,
+    wordWrap:                   'on'   as const,
     minimap:                    { enabled: false },
     largeFileOptimizations:     true,
     automaticLayout:            true,
-    contextmenu:                false,       // disable right-click menu
-    quickSuggestions:           false,       // disable default suggestions
-    suggestOnTriggerCharacters: true,        // keep @ and / triggers
-    wordBasedSuggestions:       'off' as const,
+    contextmenu:                false,
+    quickSuggestions:           false,
+    suggestOnTriggerCharacters: true,
+    wordBasedSuggestions:       'off'  as const,
     parameterHints:             { enabled: false },
     snippetSuggestions:         'none' as const,
   }
 
-  // Memoize preview to avoid re-rendering on every keystroke
-  const previewPane = useMemo(() => (
-    <div style={{ padding: 16, border: '1px solid #eee', borderRadius: 8, minHeight: 150, overflow: 'auto', height }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
-    </div>
-  ), [markdown, height])
+  // ── Preview with interactive tables ──────────────────────────────────────
+
+  const previewContent = useMemo(() => {
+    const segments = splitSegments(markdown)
+    return (
+      <div style={{ padding: 16, height, overflow: 'auto', border: '1px solid #eee', borderRadius: 8 }}>
+        {segments.map((seg, idx) =>
+          seg.type === 'text' ? (
+            <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]}>{seg.content}</ReactMarkdown>
+          ) : (
+            <InteractiveTable key={idx} tableLines={seg.lines} startLine={seg.startLine} ops={tableOps} />
+          )
+        )}
+      </div>
+    )
+  }, [markdown, height, tableOps])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (format === 'markdown') {
-    const lines  = markdown.split('\n')
     const isBoth = mode === 'both'
-
     return (
       <div style={{ padding: 16 }}>
-        {/* Mode switcher */}
         <div style={{ marginBottom: 12 }}>
           <button onClick={() => setMode('edit')}>Edit</button>
           <button onClick={() => setMode('preview')}>Preview</button>
@@ -266,9 +345,8 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
         </div>
 
         <div style={{ display: 'flex', gap: 0 }}>
-          {/* ── Edit pane ── */}
           {(mode === 'edit' || isBoth) && (
-            <div style={{ width: isBoth ? '50%' : '100%', flexShrink: 0, position: 'relative' }} onPaste={handlePaste}>
+            <div style={{ width: isBoth ? '50%' : '100%', flexShrink: 0 }} onPaste={handlePaste}>
               <MonacoEditor
                 height={height}
                 width="100%"
@@ -278,88 +356,12 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
                 onMount={handleEditorMount}
                 options={monacoOptions}
               />
-
-              {/* Column resize handles */}
-              {colWidths.map((w, i) => (
-                <div
-                  key={i}
-                  style={{
-                    position: 'absolute', top: 0, height: '100%',
-                    left: colWidths.slice(0, i).reduce((a, b) => a + b, 0),
-                    width: w, borderRight: '2px solid #ddd',
-                    cursor: 'col-resize', zIndex: 60,
-                  }}
-                  onMouseDown={(e) => startDrag(i, e)}
-                />
-              ))}
-
-              {/* Cell overlays — hover tooltips + inline editing */}
-              {lines.map((line, rowIndex) => {
-                if (!line.includes('|')) return null
-                const cells = line.split('|').slice(1, -1)
-                return cells.map((cell, colIndex) => {
-                  const isHeader  = rowIndex === 0
-                  const left      = colWidths.slice(0, colIndex).reduce((a, b) => a + b, 0)
-                  const top       = rowIndex * 24
-                  const width     = colWidths[colIndex] || 100
-                  const isEditing = editingCell?.row === rowIndex && editingCell?.col === colIndex
-
-                  return (
-                    <div
-                      key={`${rowIndex}-${colIndex}`}
-                      style={{ position: 'absolute', top, left, width, height: 24, border: '1px solid transparent', cursor: 'text' }}
-                      onMouseEnter={() => { isHeader ? setHoveredHeader(colIndex) : colIndex === 0 && setHoveredRow(rowIndex) }}
-                      onMouseLeave={() => { isHeader ? setHoveredHeader(null)    : colIndex === 0 && setHoveredRow(null) }}
-                    >
-                      {isEditing ? (
-                        <input
-                          autoFocus
-                          style={{ width: '100%', height: '100%', padding: 0, margin: 0, border: '1px solid #333' }}
-                          value={cellValue}
-                          onChange={(e) => setCellValue(e.target.value)}
-                          onBlur={saveCellValue}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Tab') saveCellValue() }}
-                        />
-                      ) : (
-                        <span onClick={() => handleCellClick(rowIndex, colIndex, cell)}>{cell}</span>
-                      )}
-
-                      {/* Header tooltip + add/remove column buttons */}
-                      {hoveredHeader === colIndex && isHeader && (
-                        <div>
-                          <div style={{ position: 'absolute', top: -36, left: 0, background: '#333', color: '#fff', padding: '2px 6px', borderRadius: 4, fontSize: 12, whiteSpace: 'nowrap', zIndex: 100 }}>
-                            + Add Column | - Remove Column | Double-click to rename
-                          </div>
-                          <div style={{ position: 'absolute', top: -24, left: 0, display: 'flex', gap: 4 }}>
-                            <button onClick={() => addColumn(colIndex)}>+</button>
-                            <button onClick={() => deleteColumn(colIndex)}>-</button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Row tooltip + add/remove row buttons */}
-                      {hoveredRow === rowIndex && colIndex === 0 && (
-                        <div>
-                          <div style={{ position: 'absolute', top: -36, left: 0, background: '#333', color: '#fff', padding: '2px 6px', borderRadius: 4, fontSize: 12, whiteSpace: 'nowrap', zIndex: 100 }}>
-                            + Add Row | - Remove Row
-                          </div>
-                          <div style={{ position: 'absolute', top: -24, left: 0, display: 'flex', gap: 4 }}>
-                            <button onClick={() => addRow(rowIndex)}>+</button>
-                            <button onClick={() => deleteRow(rowIndex)}>-</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
-              })}
             </div>
           )}
 
-          {/* ── Preview pane ── */}
           {(mode === 'preview' || isBoth) && (
             <div style={{ width: isBoth ? '50%' : '100%', flexShrink: 0 }}>
-              {previewPane}
+              {previewContent}
             </div>
           )}
         </div>
@@ -381,10 +383,10 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
 // ── Demo page ─────────────────────────────────────────────────────────────────
 
 export function EditorDemoPage() {
-  const [content, setContent] = useState<string>(
+  const [content, setContent] = useState(
 `# Markdown Demo
 
-Hello @jason.h, try /Heading 2
+Hello \`@jason.h\`, try /Heading 2
 
 ## Table Example
 
@@ -403,7 +405,7 @@ Paste an image here or try @mention someone.`
       <AdvancedEditor value={content} onChange={setContent} format="markdown" height="600px" />
 
       <div style={{ marginTop: 24 }}>
-        <h2>Raw Markdown Content:</h2>
+        <h2>Raw Markdown:</h2>
         <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, maxHeight: 300, overflow: 'auto' }}>
           {content}
         </pre>
@@ -414,10 +416,8 @@ Paste an image here or try @mention someone.`
         <p>{mentionList.join(', ')}</p>
         <h2>Available /slash commands:</h2>
         <ul>
-          {slashCommands.map((cmd) => (
-            <li key={cmd.label}>
-              <strong>{cmd.label}</strong>: {cmd.insert.replace(/\n/g, '\\n')}
-            </li>
+          {slashCommands.map(cmd => (
+            <li key={cmd.label}><strong>{cmd.label}</strong>: {cmd.insert.replace(/\n/g, '\\n')}</li>
           ))}
         </ul>
       </div>
