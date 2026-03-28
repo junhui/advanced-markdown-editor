@@ -3,7 +3,8 @@ name: Build and Publish AdvancedEditor
 on:
   push:
     branches:
-      - main  # Triggered on every push to main branch
+      - main
+      - claude/setup-editor-skeleton-Dg8hu
 
 jobs:
   build-and-publish:
