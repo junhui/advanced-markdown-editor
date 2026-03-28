@@ -98,6 +98,15 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
         return { suggestions: [] }
       },
     })
+
+    // Monaco markdown mode doesn't reliably fire triggerCharacters for '/'.
+    // Manually trigger the suggest widget whenever the user types '/'.
+    editor.onDidChangeModelContent((e: any) => {
+      const typed = e.changes[0]?.text
+      if (typed === '/') {
+        setTimeout(() => editor.trigger('keyboard', 'editor.action.triggerSuggest', {}), 50)
+      }
+    })
   }
 
   const monacoOptions = {
