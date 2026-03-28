@@ -37,36 +37,37 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
     onChange(v)
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (format !== 'markdown') return
-    const editor = monacoRef.current
-    if (!editor) return
-    const model = editor.getModel()
-    const selection = editor.getSelection()
-    if (!model || !selection) return
-    const cursorPos = model.getOffsetAt(selection.getStartPosition())
-    const textBefore = model.getValue().slice(0, cursorPos)
+  const handleEditorMount = (editor: any) => {
+    monacoRef.current = editor
+    editor.onKeyUp(() => {
+      if (format !== 'markdown') return
+      const model = editor.getModel()
+      const selection = editor.getSelection()
+      if (!model || !selection) return
+      const cursorPos = model.getOffsetAt(selection.getStartPosition())
+      const textBefore = model.getValue().slice(0, cursorPos)
 
-    // @mention
-    const mentionMatch = textBefore.match(/@([\w.]*)$/)
-    if (mentionMatch) {
-      const keyword = mentionMatch[1]
-      setSuggestions(mentionList.filter((m) => m.toLowerCase().startsWith(keyword.toLowerCase())))
-      setSlashList([])
-      return
-    }
+      // @mention
+      const mentionMatch = textBefore.match(/@([\w.]*)$/)
+      if (mentionMatch) {
+        const keyword = mentionMatch[1]
+        setSuggestions(mentionList.filter((m) => m.toLowerCase().startsWith(keyword.toLowerCase())))
+        setSlashList([])
+        return
+      }
 
-    // /slash
-    const slashMatch = textBefore.match(/\/([\w]*)$/)
-    if (slashMatch) {
-      const keyword = slashMatch[1].toLowerCase()
-      setSlashList(slashCommands.filter((c) => c.label.toLowerCase().includes(keyword)))
+      // /slash
+      const slashMatch = textBefore.match(/\/([\w]*)$/)
+      if (slashMatch) {
+        const keyword = slashMatch[1].toLowerCase()
+        setSlashList(slashCommands.filter((c) => c.label.toLowerCase().includes(keyword)))
+        setSuggestions([])
+        return
+      }
+
       setSuggestions([])
-      return
-    }
-
-    setSuggestions([])
-    setSlashList([])
+      setSlashList([])
+    })
   }
 
   const previewPane = useMemo(() => {
@@ -102,8 +103,7 @@ export default function AdvancedEditor({ value, onChange, format, height = '500p
               defaultLanguage="markdown"
               value={markdown}
               onChange={handleEditorChange}
-              onMount={(editor) => (monacoRef.current = editor)}
-              onKeyDown={handleKeyDown}
+              onMount={handleEditorMount}
               options={{
                 wordWrap: 'on',
                 minimap: { enabled: false },
