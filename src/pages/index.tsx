@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import AdvancedEditor from 'advanced-markdown-editor'
+import AdvancedEditor from '../components/AdvancedEditor'
 
 export default function Home() {
   const [content, setContent] = useState(`# Hello Markdown Editor

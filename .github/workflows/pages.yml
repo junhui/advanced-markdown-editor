@@ -32,9 +32,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install latest advanced-markdown-editor from npm
-        run: npm install advanced-markdown-editor@latest
-
       - name: Build static export
         run: npm run build
 
