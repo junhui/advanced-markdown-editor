@@ -17,7 +17,7 @@
   "author": "Your Name",
   "license": "MIT",
   "dependencies": {
-    "@monaco-editor/react": "^5.0.0",
+    "@monaco-editor/react": "^4.6.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^8.0.7",
