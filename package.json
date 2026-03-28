@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "dev": "next dev",
-    "build": "tsc && next build",
+    "build": "next build",
+    "build:lib": "tsc --declaration --outDir dist",
     "start": "next start"
   },
   "keywords": ["react", "markdown", "editor", "monaco", "mentions", "slash-commands", "table"],

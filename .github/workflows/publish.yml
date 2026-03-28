@@ -27,7 +27,7 @@ jobs:
 
       # 4. Build TypeScript
       - name: Build
-        run: npx tsc --declaration --outDir dist
+        run: npm run build:lib
 
       # 5. Publish to npm
       - name: Publish to npm
