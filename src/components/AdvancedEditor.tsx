@@ -29,6 +29,8 @@ export interface EditorProps {
   className?: string
   /** Monaco editor options — merged on top of defaults; passed values override defaults */
   options?:   Record<string, unknown>
+  /** Language for format="other" mode (default: 'javascript') */
+  language?:  string
 }
 
 // ── Default Monaco options ────────────────────────────────────────────────────
@@ -223,7 +225,7 @@ function ContextMenu({ menu, onAction, onClose }: {
 
 export default function AdvancedEditor({
   value, onChange, format,
-  height = '500px', theme = 'light', className = '', options = {},
+  height = '500px', theme = 'light', className = '', options = {}, language = 'javascript',
 }: EditorProps) {
   const [markdown, setMarkdown] = useState(value)
   const [mode, setMode]         = useState<Mode>('both')
@@ -461,41 +463,12 @@ export default function AdvancedEditor({
     <div className={className}>
       <MonacoEditor
         height={height}
-        language="javascript"
+        language={language}
         theme={theme}
         value={value}
         onChange={handleEditorChange}
         options={{ ...DEFAULT_OPTIONS, ...options }}
       />
-    </div>
-  )
-}
-
-// ── Demo page ─────────────────────────────────────────────────────────────────
-
-export function EditorDemoPage() {
-  const [content, setContent] = useState(
-`# Markdown Demo
-
-Hello \`@jason.h\`, try /Heading 2
-
-## Table Example
-
-| Name | Age |
-|------|-----|
-| Alice | 23 |
-| Bob | 30 |
-
-Paste an image here or try @mention someone.`
-  )
-  return (
-    <div style={{ padding: 24 }}>
-      <h1>Advanced Markdown Editor Demo</h1>
-      <AdvancedEditor value={content} onChange={setContent} format="markdown" height="500px" />
-      <div style={{ marginTop: 24 }}>
-        <h2>Raw Markdown:</h2>
-        <pre style={{ background: '#f6f8fa', padding: 16, borderRadius: 6, maxHeight: 300, overflow: 'auto', fontSize: 13 }}>{content}</pre>
-      </div>
     </div>
   )
 }
