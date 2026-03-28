@@ -1,5 +1,5 @@
 {
-  "name": "@junhuih/advanced-markdown-editor",
+  "name": "advanced-markdown-editor",
   "version": "1.0.1",
   "description": "Performance optimized Markdown-first editor for React",
   "main": "dist/index.js",

@@ -33,7 +33,7 @@ A **Markdown-first, feature-rich React editor**, optimized for **large Markdown 
 ## Installation
 
 ```bash
-npm install @junhuih/advanced-markdown-editor
+npm install advanced-markdown-editor
 ```
 
 Dependencies:
@@ -48,7 +48,7 @@ Dependencies:
 
 ```tsx
 import { useState } from 'react'
-import { AdvancedEditor } from '@junhuih/advanced-markdown-editor'
+import { AdvancedEditor } from 'advanced-markdown-editor'
 
 export default function App() {
   const [content, setContent] = useState('# Hello Advanced Markdown Editor\nTry @jason.h or /Heading 2')
