@@ -209,6 +209,9 @@ body {
 }
 .demo-nav-link:hover { background: #f3f4f6; color: #1f2328; }
 .demo-nav-link--active { color: #1f2328; font-weight: 600; background: #eef0f3; }
+.demo-nav-divider { width: 1px; height: 18px; background: #d0d7de; margin: 0 4px; }
+.demo-nav-external { display: inline-flex; align-items: center; gap: 4px; }
+.demo-nav-github   { display: inline-flex; align-items: center; gap: 5px; }
 
 /* Page content */
 .demo-content {

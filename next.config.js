@@ -1,11 +1,13 @@
 /** @type {import('next').NextConfig} */
+const isProd = process.env.NODE_ENV === 'production'
+
 const nextConfig = {
   output: 'export',
-  // GitHub Pages serves the site at /advanced-markdown-editor/
-  basePath: '/advanced-markdown-editor',
-  assetPrefix: '/advanced-markdown-editor/',
+  // basePath only applies on GitHub Pages; local dev serves at localhost:3000
+  basePath:    isProd ? '/advanced-markdown-editor' : '',
+  assetPrefix: isProd ? '/advanced-markdown-editor/' : '',
   images: {
-    unoptimized: true, // Required for static export
+    unoptimized: true,
   },
 }
 

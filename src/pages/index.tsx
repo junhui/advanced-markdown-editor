@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import NavBar from '../components/NavBar'
+import { GITHUB_REPO, GITHUB_PAGES } from '../components/NavBar'
 
 const features = [
   { title: '@Mentions',       desc: 'Type @ to trigger a suggestion list of team members.'                       },
@@ -12,14 +14,7 @@ const features = [
 export default function Home() {
   return (
     <div className="home-page">
-      <nav className="demo-nav">
-        <span className="demo-nav-logo">Advanced Markdown Editor</span>
-        <div className="demo-nav-links">
-          <Link href="/"                 className="demo-nav-link demo-nav-link--active">Home</Link>
-          <Link href="/demo/markdown"    className="demo-nav-link">Markdown</Link>
-          <Link href="/demo/javascript"  className="demo-nav-link">Code Editor</Link>
-        </div>
-      </nav>
+      <NavBar active="home" />
 
       <div className="home-content">
         <div className="home-hero">
@@ -34,6 +29,8 @@ export default function Home() {
           <div className="home-hero-links">
             <Link href="/demo/markdown"   className="btn btn-primary">Markdown Demo</Link>
             <Link href="/demo/javascript" className="btn btn-secondary">Code Editor Demo</Link>
+            <a href={GITHUB_PAGES} target="_blank" rel="noreferrer" className="btn btn-secondary">Live Demo ↗</a>
+            <a href={GITHUB_REPO}  target="_blank" rel="noreferrer" className="btn btn-secondary">GitHub ↗</a>
           </div>
         </div>
 

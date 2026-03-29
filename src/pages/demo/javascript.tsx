@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import Link from 'next/link'
+import NavBar from '../../components/NavBar'
 import AdvancedEditor from '../../components/AdvancedEditor'
 
 // ── Code presets ──────────────────────────────────────────────────────────────
@@ -181,14 +181,7 @@ export default function JavaScriptDemo() {
 
   return (
     <div className="demo-page">
-      <nav className="demo-nav">
-        <Link href="/" className="demo-nav-logo">Advanced Markdown Editor</Link>
-        <div className="demo-nav-links">
-          <Link href="/"                className="demo-nav-link">Home</Link>
-          <Link href="/demo/markdown"   className="demo-nav-link">Markdown</Link>
-          <Link href="/demo/javascript" className="demo-nav-link demo-nav-link--active">Code Editor</Link>
-        </div>
-      </nav>
+      <NavBar active="javascript" />
 
       <div className="demo-content">
         <div className="demo-header">
