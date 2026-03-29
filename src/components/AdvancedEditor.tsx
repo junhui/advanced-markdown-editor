@@ -46,7 +46,12 @@ export interface EditorAction {
 export interface EditorProps {
   value:     string
   onChange:  (val: string) => void
-  format:    'markdown' | 'other'
+  /**
+   * Monaco language ID. Use 'markdown' to enable the preview pane, @mentions,
+   * /slash commands, and table right-click editing. Any other value renders a
+   * plain code editor. Defaults to 'plaintext'.
+   */
+  language?: string
   height?:   string
   /** Monaco theme — e.g. 'vs-dark' | 'light' (default: 'light') */
   theme?:    string
@@ -54,8 +59,6 @@ export interface EditorProps {
   className?: string
   /** Monaco editor options — merged on top of defaults; passed values override defaults */
   options?:  Record<string, unknown>
-  /** Language for format="other" mode (default: 'javascript') */
-  language?: string
   /**
    * Mention list — static array or async resolver.
    * The resolver receives the partial query typed after @.
@@ -309,15 +312,17 @@ function ContextMenu({ menu, cmds, onAction, onClose }: {
 // ── Main editor ───────────────────────────────────────────────────────────────
 
 export default function AdvancedEditor({
-  value, onChange, format,
+  value, onChange,
+  language = 'plaintext',
   height = '500px', theme = 'light', className = '', options = {},
-  language = 'javascript',
   mentions: mentionsProp,
   slashCommands: slashCommandsProp,
   actions = [],
 }: EditorProps) {
+  const isMarkdown = language === 'markdown'
+
   const [markdown, setMarkdown]       = useState(value)
-  const [mode, setMode]               = useState<Mode>('both')
+  const [mode, setMode]               = useState<Mode>('edit')
   const [ctxMenu, setCtxMenu]         = useState<CtxMenu | null>(null)
   const [loadingSet, setLoadingSet]   = useState<Set<number>>(new Set())
 
@@ -325,13 +330,15 @@ export default function AdvancedEditor({
   const monacoApiRef   = useRef<any>(null)
   const disposable     = useRef<any>(null)
   const previewRef     = useRef<HTMLDivElement>(null)
-  const modeRef        = useRef<Mode>('both')
+  const modeRef        = useRef<Mode>('edit')
   const scrollSync     = useRef(false)
   // Keep latest prop values accessible inside stable Monaco callbacks
+  const langRef        = useRef(language)
   const mentionsRef    = useRef(mentionsProp)
   const slashCmdsRef   = useRef(slashCommandsProp ?? DEFAULT_SLASH_COMMANDS)
 
-  useEffect(() => { modeRef.current = mode }, [mode])
+  useEffect(() => { modeRef.current  = mode     }, [mode])
+  useEffect(() => { langRef.current  = language }, [language])
   useEffect(() => { setMarkdown(value) }, [value])
   useEffect(() => { mentionsRef.current  = mentionsProp }, [mentionsProp])
   useEffect(() => { slashCmdsRef.current = slashCommandsProp ?? DEFAULT_SLASH_COMMANDS }, [slashCommandsProp])
@@ -341,14 +348,14 @@ export default function AdvancedEditor({
 
   const handleEditorChange = (val?: string) => {
     const v = val ?? ''
-    if (format === 'markdown') setMarkdown(v)
+    if (langRef.current === 'markdown') setMarkdown(v)
     onChange(v)
   }
 
   // ── Image paste ─────────────────────────────────────────────────────────────
 
   const handlePaste = (e: React.ClipboardEvent) => {
-    if (format !== 'markdown') return
+    if (langRef.current !== 'markdown') return
     for (const item of e.clipboardData.items) {
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile(); if (!file) continue
@@ -430,15 +437,16 @@ export default function AdvancedEditor({
       },
     })
 
-    // Slash key → force trigger suggest widget
+    // Slash key → force trigger suggest widget (markdown only)
     editor.onKeyDown((e: any) => {
-      if (e.browserEvent?.key === '/') {
+      if (langRef.current === 'markdown' && e.browserEvent?.key === '/') {
         setTimeout(() => editor.trigger('keyboard', 'editor.action.triggerSuggest', {}), 50)
       }
     })
 
-    // Right-click context menu
+    // Right-click context menu (markdown only)
     editor.onContextMenu((e: any) => {
+      if (langRef.current !== 'markdown') return
       const position = e.target?.position; if (!position) return
       e.event.preventDefault(); e.event.stopPropagation()
       const model   = editor.getModel()
@@ -554,7 +562,7 @@ export default function AdvancedEditor({
       const result  = await action.event(current)
       if (typeof result === 'string') {
         monacoRef.current?.setValue(result)
-        if (format === 'markdown') setMarkdown(result)
+        if (langRef.current === 'markdown') setMarkdown(result)
         onChange(result)
       }
     } finally {
@@ -564,14 +572,13 @@ export default function AdvancedEditor({
         return next
       })
     }
-  }, [actions, format, onChange])
+  }, [actions, onChange])
 
   // ── Derived ──────────────────────────────────────────────────────────────────
 
-  const mergedOptions  = useMemo(() => ({ ...DEFAULT_OPTIONS, ...options }), [options])
-  const effectiveCmds  = slashCommandsProp ?? DEFAULT_SLASH_COMMANDS
-  const showModes      = format === 'markdown'
-  const showBar        = showModes || actions.length > 0
+  const mergedOptions = useMemo(() => ({ ...DEFAULT_OPTIONS, ...options }), [options])
+  const effectiveCmds = slashCommandsProp ?? DEFAULT_SLASH_COMMANDS
+  const showBar       = isMarkdown || actions.length > 0
 
   // ── Preview pane ─────────────────────────────────────────────────────────────
 
@@ -588,7 +595,7 @@ export default function AdvancedEditor({
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
-  if (format === 'markdown') {
+  if (isMarkdown) {
     const isBoth = mode === 'both'
     return (
       <div
@@ -634,7 +641,7 @@ export default function AdvancedEditor({
     )
   }
 
-  // format="other" — plain code editor
+  // Non-markdown plain code editor
   return (
     <div
       className={className}

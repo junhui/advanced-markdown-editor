@@ -167,7 +167,7 @@ function buildPropsDisplay(
   const actionsProp = showActions  ? '\n  actions={[aiPolishAction, sortListsAction]}' : ''
 
   return `<AdvancedEditor
-  format="markdown"
+  language="markdown"
   value={content}
   onChange={setContent}
   height="${height}"
@@ -319,7 +319,7 @@ export default function MarkdownDemo() {
 
         {/* Editor */}
         <AdvancedEditor
-          format="markdown"
+          language="markdown"
           value={content}
           onChange={setContent}
           height={height}

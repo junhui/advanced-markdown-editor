@@ -83,7 +83,7 @@ export default function App() {
 
   return (
     <AdvancedEditor
-      format="markdown"
+      language="markdown"
       value={content}
       onChange={setContent}
       height="500px"

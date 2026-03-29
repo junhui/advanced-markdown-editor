@@ -18,7 +18,7 @@ export default function App() {
 
   return (
     <AdvancedEditor
-      format="markdown"
+      language="markdown"
       value={content}
       onChange={setContent}
       height="600px"
@@ -55,7 +55,7 @@ export default function App() {
 
   return (
     <AdvancedEditor
-      format="markdown"
+      language="markdown"
       value={content}
       onChange={handleChange}
       {...editorConfig}
@@ -145,7 +145,6 @@ function buildPropsDisplay(
 ) {
   const lang = PRESETS[preset]?.language ?? 'javascript'
   return `<AdvancedEditor
-  format="other"
   language="${lang}"
   value={content}
   onChange={setContent}
@@ -195,8 +194,8 @@ export default function JavaScriptDemo() {
         <div className="demo-header">
           <h1>Code Editor Demo</h1>
           <p>
-            Using the editor in <code>format=&quot;other&quot;</code> mode — a plain Monaco editor
-            with a configurable language, theme, and options.
+            Plain Monaco editor — set <code>language</code> to any Monaco-supported language ID.
+            Non-markdown languages skip the preview pane, @mentions, and slash commands.
           </p>
         </div>
 
@@ -253,7 +252,6 @@ export default function JavaScriptDemo() {
 
         {/* Editor */}
         <AdvancedEditor
-          format="other"
           language={language}
           value={content}
           onChange={setContent}
@@ -273,7 +271,7 @@ export default function JavaScriptDemo() {
 
         {/* Differences callout */}
         <div className="demo-callout">
-          <strong>format=&quot;other&quot; vs format=&quot;markdown&quot;</strong>
+          <strong>language=&quot;javascript&quot; vs language=&quot;markdown&quot;</strong>
           <ul>
             <li>No markdown preview pane or mode switcher</li>
             <li>No @mention or /slash completions</li>
