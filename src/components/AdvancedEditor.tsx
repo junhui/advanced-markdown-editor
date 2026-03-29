@@ -103,6 +103,69 @@ const DEFAULT_OPTIONS = {
   snippetSuggestions:         'none'        as const,
 }
 
+// ── Smart-paste helpers ───────────────────────────────────────────────────────
+
+function isPlainUrl(text: string): boolean {
+  return /^https?:\/\/[^\s]+$/.test(text) && !text.includes('\n')
+}
+
+function csvToMarkdownTable(text: string): string | null {
+  const lines = text.trim().split('\n').filter(l => l.trim())
+  if (lines.length < 2) return null
+  const sep  = lines[0].includes('\t') ? '\t' : ','
+  const rows = lines.map(l => l.split(sep).map(c => c.trim().replace(/^"(.*)"$/, '$1')))
+  const cols = rows[0].length
+  if (cols < 2 || !rows.every(r => r.length === cols)) return null
+  const header = '| ' + rows[0].join(' | ') + ' |'
+  const divdr  = '| ' + rows[0].map(() => '---').join(' | ') + ' |'
+  const body   = rows.slice(1).map(r => '| ' + r.join(' | ') + ' |').join('\n')
+  return [header, divdr, body].join('\n')
+}
+
+function htmlTableToMarkdown(html: string): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const doc   = new DOMParser().parseFromString(html, 'text/html')
+    const table = doc.querySelector('table'); if (!table) return null
+    const rows  = Array.from(table.querySelectorAll('tr'))
+    const parseRow = (row: Element) =>
+      Array.from(row.querySelectorAll('th,td'))
+        .map(c => (c.textContent ?? '').trim().replace(/\|/g, '\\|'))
+    const allRows = rows.map(parseRow).filter(r => r.length > 0)
+    if (allRows.length < 1) return null
+    const cols   = Math.max(...allRows.map(r => r.length))
+    const pad    = (r: string[]) => [...r, ...Array(cols - r.length).fill('')]
+    const header = '| ' + pad(allRows[0]).join(' | ') + ' |'
+    const divdr  = '| ' + Array(cols).fill('---').join(' | ') + ' |'
+    const body   = allRows.slice(1).map(r => '| ' + pad(r).join(' | ') + ' |').join('\n')
+    return allRows.length === 1 ? [header, divdr].join('\n') : [header, divdr, body].join('\n')
+  } catch { return null }
+}
+
+function extractHtmlLink(html: string): { text: string; href: string } | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const a   = doc.querySelector('a[href]') as HTMLAnchorElement | null
+    if (!a || !a.href.startsWith('http')) return null
+    return { href: a.href, text: (a.textContent ?? '').trim() || a.href }
+  } catch { return null }
+}
+
+async function fetchPageTitle(url: string): Promise<string> {
+  try {
+    const ctrl = new AbortController()
+    setTimeout(() => ctrl.abort(), 3000)
+    const res  = await fetch(url, { signal: ctrl.signal, mode: 'cors' })
+    if (!res.ok) return url
+    const html  = await res.text()
+    const match = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+    return match?.[1]?.trim() || url
+  } catch { return url }
+}
+
+function mdEscape(text: string) { return text.replace(/[\[\]]/g, c => `\\${c}`) }
+
 // ── Context menu types ────────────────────────────────────────────────────────
 
 type CtxMenu =
@@ -352,26 +415,74 @@ export default function AdvancedEditor({
     onChange(v)
   }
 
-  // ── Image paste ─────────────────────────────────────────────────────────────
+  // ── Smart paste ──────────────────────────────────────────────────────────────
+
+  const insertAtCursor = (text: string) => {
+    const editor = monacoRef.current; if (!editor) return
+    const sel = editor.getSelection(); if (!sel) return
+    editor.executeEdits('', [{ range: sel, text, forceMoveMarkers: true }])
+    editor.focus()
+  }
 
   const handlePaste = (e: React.ClipboardEvent) => {
     if (langRef.current !== 'markdown') return
-    for (const item of e.clipboardData.items) {
+
+    // 1. Image → Base64 embed
+    for (const item of Array.from(e.clipboardData.items)) {
       if (item.type.startsWith('image/')) {
         const file = item.getAsFile(); if (!file) continue
+        e.preventDefault()
         const reader = new FileReader()
         reader.onload = () => {
           const editor = monacoRef.current; if (!editor) return
-          const sel = editor.getSelection()!
+          const sel = editor.getSelection(); if (!sel) return
           editor.executeEdits('', [{
-            range: sel,
-            text: `![pasted_image](${reader.result})`,
-            forceMoveMarkers: true,
+            range: sel, text: `![pasted_image](${reader.result})`, forceMoveMarkers: true,
           }])
         }
-        reader.readAsDataURL(file); e.preventDefault(); break
+        reader.readAsDataURL(file)
+        return
       }
     }
+
+    const html = e.clipboardData.getData('text/html')
+    const text = e.clipboardData.getData('text/plain').trim()
+
+    // 2. HTML <table> → markdown table
+    if (html) {
+      const mdTable = htmlTableToMarkdown(html)
+      if (mdTable) { e.preventDefault(); insertAtCursor(mdTable); return }
+    }
+
+    // 3. Rich link from HTML clipboard (anchor tag, no table)
+    if (html && !/<table/i.test(html)) {
+      const link = extractHtmlLink(html)
+      if (link) {
+        e.preventDefault()
+        insertAtCursor(`[${mdEscape(link.text)}](${link.href})`)
+        return
+      }
+    }
+
+    // 4. Plain URL → insert placeholder, then replace with fetched page title
+    if (isPlainUrl(text)) {
+      e.preventDefault()
+      const placeholder = `[\u2026](${text})`   // […](url)
+      insertAtCursor(placeholder)
+      fetchPageTitle(text).then(title => {
+        const editor = monacoRef.current; if (!editor) return
+        const model  = editor.getModel();  if (!model)  return
+        const updated = model.getValue().replace(placeholder, `[${mdEscape(title)}](${text})`)
+        if (updated !== model.getValue()) model.setValue(updated)
+      })
+      return
+    }
+
+    // 5. CSV / TSV → markdown table
+    const mdTable = csvToMarkdownTable(text)
+    if (mdTable) { e.preventDefault(); insertAtCursor(mdTable); return }
+
+    // default: let Monaco handle it normally
   }
 
   // ── Monaco mount ────────────────────────────────────────────────────────────
@@ -645,7 +756,7 @@ export default function AdvancedEditor({
   return (
     <div
       className={className}
-      style={showBar ? { border: '1px solid #d0d7de', borderRadius: 6, overflow: 'hidden' } : undefined}
+      style={{ border: '1px solid #d0d7de', borderRadius: 6, overflow: 'hidden' }}
     >
       {showBar && (
         <ModeBar
@@ -654,15 +765,17 @@ export default function AdvancedEditor({
           showModes={false}
         />
       )}
-      <MonacoEditor
-        height={height}
-        language={language}
-        theme={theme}
-        value={value}
-        onChange={handleEditorChange}
-        onMount={handleEditorMount}
-        options={mergedOptions}
-      />
+      <div style={{ padding: 5 }}>
+        <MonacoEditor
+          height={height}
+          language={language}
+          theme={theme}
+          value={value}
+          onChange={handleEditorChange}
+          onMount={handleEditorMount}
+          options={mergedOptions}
+        />
+      </div>
     </div>
   )
 }
