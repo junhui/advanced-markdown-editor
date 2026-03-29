@@ -525,18 +525,19 @@ export default function AdvancedEditor({
           }
         }
 
-        // /slash
+        // /slash — range covers the full '/query' text so insertion replaces it.
+        // filterText includes the '/' prefix so Monaco's own filter correctly
+        // matches '/head' against '/Heading 1' instead of against 'Heading 1'.
         const sMatch = before.match(/\/([\w]*)$/)
         if (sMatch) {
           const range = {
             startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
             startColumn: position.column - sMatch[0].length, endColumn: position.column,
           }
-          const cmds = slashCmdsRef.current
-            .filter(c => c.label.toLowerCase().includes(sMatch[1].toLowerCase()))
           return {
-            suggestions: cmds.map(c => ({
+            suggestions: slashCmdsRef.current.map(c => ({
               label:      c.label,
+              filterText: `/${c.label}`,
               kind:       monaco.languages.CompletionItemKind.Snippet,
               insertText: c.insert,
               range,
