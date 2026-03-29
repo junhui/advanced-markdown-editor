@@ -5,32 +5,73 @@ import MonacoEditor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-export const mentionList   = ['jason.h', 'alice', 'bob', 'charlie', 'eve', 'david']
-export const slashCommands = [
-  { label: 'Heading 1',  insert: '# '        },
-  { label: 'Heading 2',  insert: '## '       },
-  { label: 'Heading 3',  insert: '### '      },
-  { label: 'Bold',       insert: '**bold**'  },
-  { label: 'Italic',     insert: '*italic*'  },
-  { label: 'Code block', insert: '```\n\n```'},
+// ── Defaults (exported for reuse in consumer code) ────────────────────────────
+
+export const DEFAULT_MENTIONS: string[] = ['jason.h', 'alice', 'bob', 'charlie', 'eve', 'david']
+
+export const DEFAULT_SLASH_COMMANDS: SlashCommand[] = [
+  { label: 'Heading 1',  insert: '# '         },
+  { label: 'Heading 2',  insert: '## '        },
+  { label: 'Heading 3',  insert: '### '       },
+  { label: 'Bold',       insert: '**bold**'   },
+  { label: 'Italic',     insert: '*italic*'   },
+  { label: 'Code block', insert: '```\n\n```' },
   { label: 'Table',      insert: '| Header1 | Header2 |\n|---------|---------|\n|         |         |\n' },
 ]
 
-type Mode = 'edit' | 'preview' | 'both'
+// Legacy aliases
+export const mentionList   = DEFAULT_MENTIONS
+export const slashCommands = DEFAULT_SLASH_COMMANDS
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+export interface SlashCommand {
+  label:  string
+  insert: string
+}
+
+/** A toolbar action button rendered left of the mode switcher icons. */
+export interface EditorAction {
+  /** Icon element shown in the button (15×15 recommended). */
+  icon:  React.ReactNode
+  /** Tooltip / accessible label. */
+  name:  string
+  /**
+   * Called with the current editor content.
+   * Return a string to replace the editor content, or void/undefined to leave it unchanged.
+   */
+  event: (content: string) => string | void | Promise<string | void>
+}
 
 export interface EditorProps {
-  value:      string
-  onChange:   (val: string) => void
-  format:     'markdown' | 'other'
-  height?:    string
+  value:     string
+  onChange:  (val: string) => void
+  format:    'markdown' | 'other'
+  height?:   string
   /** Monaco theme — e.g. 'vs-dark' | 'light' (default: 'light') */
-  theme?:     string
+  theme?:    string
   /** Extra CSS class applied to the outermost container */
   className?: string
   /** Monaco editor options — merged on top of defaults; passed values override defaults */
-  options?:   Record<string, unknown>
+  options?:  Record<string, unknown>
   /** Language for format="other" mode (default: 'javascript') */
-  language?:  string
+  language?: string
+  /**
+   * Mention list — static array or async resolver.
+   * The resolver receives the partial query typed after @.
+   * Defaults to DEFAULT_MENTIONS.
+   */
+  mentions?: string[] | ((query: string) => string[] | Promise<string[]>)
+  /**
+   * Slash command list — overrides DEFAULT_SLASH_COMMANDS entirely.
+   */
+  slashCommands?: SlashCommand[]
+  /**
+   * Custom toolbar action buttons.
+   * Rendered left of the Edit/Preview/Split icons (still right-aligned).
+   * Each button shows a loading spinner while its event is running.
+   */
+  actions?: EditorAction[]
 }
 
 // ── Default Monaco options ────────────────────────────────────────────────────
@@ -66,6 +107,8 @@ type CtxMenu =
   | { kind: 'table'; x: number; y: number; lineIdx: number; colIdx: number
       isHeader: boolean; isSep: boolean; isDataRow: boolean
       tableStart: number; tableEnd: number }
+
+type Mode = 'edit' | 'preview' | 'both'
 
 // ── Table helpers ─────────────────────────────────────────────────────────────
 
@@ -116,32 +159,55 @@ const IconColumns = () => (
   </svg>
 )
 
-// ── Mode toolbar ──────────────────────────────────────────────────────────────
+const IconSpinner = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+    style={{ animation: 'tb-spin 0.7s linear infinite', display: 'block' }}>
+    <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+    <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+  </svg>
+)
 
-function ModeBar({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
-  const btn = (m: Mode, label: string, icon: React.ReactNode) => {
-    const active = mode === m
-    return (
-      <div key={m} className="tb-tip-host">
-        <button
-          onClick={() => onChange(m)}
-          style={{
-            width: 30, height: 30, border: 'none', borderRadius: 6, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: active ? '#dbeafe' : 'transparent',
-            color:      active ? '#1d4ed8' : '#57606a',
-            transition: 'background 0.15s, color 0.15s',
-          }}
-          onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#f3f4f6' }}
-          onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
-        >
-          {icon}
-        </button>
-        <span className="tb-tip">{label}</span>
-      </div>
-    )
-  }
+// ── Toolbar button ────────────────────────────────────────────────────────────
 
+function TbBtn({
+  onClick, label, icon, active = false, disabled = false,
+}: {
+  onClick: () => void; label: string; icon: React.ReactNode
+  active?: boolean; disabled?: boolean
+}) {
+  return (
+    <div className="tb-tip-host">
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          width: 30, height: 30, border: 'none', borderRadius: 6, cursor: disabled ? 'default' : 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: active ? '#dbeafe' : 'transparent',
+          color:      active ? '#1d4ed8' : disabled ? '#c0c4cc' : '#57606a',
+          transition: 'background 0.15s, color 0.15s',
+        }}
+        onMouseEnter={e => { if (!active && !disabled) e.currentTarget.style.background = '#f3f4f6' }}
+        onMouseLeave={e => { if (!active && !disabled) e.currentTarget.style.background = 'transparent' }}
+      >
+        {icon}
+      </button>
+      <span className="tb-tip">{label}</span>
+    </div>
+  )
+}
+
+// ── Mode / action toolbar ─────────────────────────────────────────────────────
+
+function ModeBar({
+  mode, onMode,
+  actions, loadingSet, onAction,
+  showModes,
+}: {
+  mode: Mode; onMode: (m: Mode) => void
+  actions: EditorAction[]; loadingSet: Set<number>; onAction: (idx: number) => void
+  showModes: boolean
+}) {
   return (
     <div style={{
       display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
@@ -149,9 +215,28 @@ function ModeBar({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }
       background: '#f6f8fa', borderBottom: '1px solid #d0d7de',
       borderRadius: '6px 6px 0 0',
     }}>
-      {btn('edit',    'Edit',    <IconEdit />)}
-      {btn('preview', 'Preview', <IconEye />)}
-      {btn('both',    'Split',   <IconColumns />)}
+      {/* Custom action buttons */}
+      {actions.map((a, i) => (
+        <TbBtn
+          key={i}
+          label={a.name}
+          icon={loadingSet.has(i) ? <IconSpinner /> : a.icon}
+          disabled={loadingSet.has(i)}
+          onClick={() => onAction(i)}
+        />
+      ))}
+
+      {/* Divider between actions and mode buttons */}
+      {actions.length > 0 && showModes && (
+        <div style={{ width: 1, height: 18, background: '#d0d7de', margin: '0 6px' }} />
+      )}
+
+      {/* Mode buttons */}
+      {showModes && <>
+        <TbBtn label="Edit"    icon={<IconEdit />}    active={mode === 'edit'}    onClick={() => onMode('edit')}    />
+        <TbBtn label="Preview" icon={<IconEye />}     active={mode === 'preview'} onClick={() => onMode('preview')} />
+        <TbBtn label="Split"   icon={<IconColumns />} active={mode === 'both'}    onClick={() => onMode('both')}    />
+      </>}
     </div>
   )
 }
@@ -177,8 +262,8 @@ function MenuItem({ label, action, onAction }: { label: string; action: string; 
   )
 }
 
-function ContextMenu({ menu, onAction, onClose }: {
-  menu: CtxMenu; onAction: (a: string) => void; onClose: () => void
+function ContextMenu({ menu, cmds, onAction, onClose }: {
+  menu: CtxMenu; cmds: SlashCommand[]; onAction: (a: string) => void; onClose: () => void
 }) {
   useEffect(() => {
     const h = () => onClose()
@@ -204,7 +289,7 @@ function ContextMenu({ menu, onAction, onClose }: {
 
   if (menu.kind === 'slash') return box(<>
     <div style={menuLabelStyle}>Insert</div>
-    {slashCommands.map(c => act(c.label, `slash:${c.label}`))}
+    {cmds.map(c => act(c.label, `slash:${c.label}`))}
   </>)
 
   return box(<>
@@ -225,28 +310,42 @@ function ContextMenu({ menu, onAction, onClose }: {
 
 export default function AdvancedEditor({
   value, onChange, format,
-  height = '500px', theme = 'light', className = '', options = {}, language = 'javascript',
+  height = '500px', theme = 'light', className = '', options = {},
+  language = 'javascript',
+  mentions: mentionsProp,
+  slashCommands: slashCommandsProp,
+  actions = [],
 }: EditorProps) {
-  const [markdown, setMarkdown] = useState(value)
-  const [mode, setMode]         = useState<Mode>('both')
-  const [ctxMenu, setCtxMenu]   = useState<CtxMenu | null>(null)
+  const [markdown, setMarkdown]       = useState(value)
+  const [mode, setMode]               = useState<Mode>('both')
+  const [ctxMenu, setCtxMenu]         = useState<CtxMenu | null>(null)
+  const [loadingSet, setLoadingSet]   = useState<Set<number>>(new Set())
 
-  const monacoRef    = useRef<any>(null)
-  const monacoApiRef = useRef<any>(null)
-  const disposable   = useRef<any>(null)
-  const previewRef   = useRef<HTMLDivElement>(null)
-  const modeRef      = useRef<Mode>('both')
-  const scrollSync   = useRef(false)
+  const monacoRef      = useRef<any>(null)
+  const monacoApiRef   = useRef<any>(null)
+  const disposable     = useRef<any>(null)
+  const previewRef     = useRef<HTMLDivElement>(null)
+  const modeRef        = useRef<Mode>('both')
+  const scrollSync     = useRef(false)
+  // Keep latest prop values accessible inside stable Monaco callbacks
+  const mentionsRef    = useRef(mentionsProp)
+  const slashCmdsRef   = useRef(slashCommandsProp ?? DEFAULT_SLASH_COMMANDS)
 
   useEffect(() => { modeRef.current = mode }, [mode])
-  useEffect(() => setMarkdown(value), [value])
+  useEffect(() => { setMarkdown(value) }, [value])
+  useEffect(() => { mentionsRef.current  = mentionsProp }, [mentionsProp])
+  useEffect(() => { slashCmdsRef.current = slashCommandsProp ?? DEFAULT_SLASH_COMMANDS }, [slashCommandsProp])
   useEffect(() => () => disposable.current?.dispose(), [])
 
+  // ── Content change ──────────────────────────────────────────────────────────
+
   const handleEditorChange = (val?: string) => {
-    const v = val || ''
+    const v = val ?? ''
     if (format === 'markdown') setMarkdown(v)
     onChange(v)
   }
+
+  // ── Image paste ─────────────────────────────────────────────────────────────
 
   const handlePaste = (e: React.ClipboardEvent) => {
     if (format !== 'markdown') return
@@ -257,53 +356,88 @@ export default function AdvancedEditor({
         reader.onload = () => {
           const editor = monacoRef.current; if (!editor) return
           const sel = editor.getSelection()!
-          editor.executeEdits('', [{ range: sel, text: `![pasted_image](${reader.result})`, forceMoveMarkers: true }])
+          editor.executeEdits('', [{
+            range: sel,
+            text: `![pasted_image](${reader.result})`,
+            forceMoveMarkers: true,
+          }])
         }
         reader.readAsDataURL(file); e.preventDefault(); break
       }
     }
   }
 
+  // ── Monaco mount ────────────────────────────────────────────────────────────
+
   const handleEditorMount = (editor: any, monaco: any) => {
     monacoRef.current    = editor
     monacoApiRef.current = monaco
 
-    // ── Completions ───────────────────────────────────────────────────────
+    // Completions — @mention and /slash
     disposable.current = monaco.languages.registerCompletionItemProvider('markdown', {
       triggerCharacters: ['@', '/'],
-      provideCompletionItems: (model: any, position: any) => {
+      provideCompletionItems: async (model: any, position: any) => {
         const before = model.getValueInRange({
           startLineNumber: position.lineNumber, startColumn: 1,
           endLineNumber:   position.lineNumber, endColumn: position.column,
         })
+
+        // @mention
         const mMatch = before.match(/@([\w.]*)$/)
         if (mMatch) {
-          const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
-            startColumn: position.column - mMatch[0].length, endColumn: position.column }
-          return { suggestions: mentionList
-            .filter(m => m.toLowerCase().startsWith(mMatch[1].toLowerCase()))
-            .map(m => ({ label: `@${m}`, kind: monaco.languages.CompletionItemKind.User, insertText: `\`@${m}\` `, range })) }
+          const range = {
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: position.column - mMatch[0].length, endColumn: position.column,
+          }
+          const prop  = mentionsRef.current
+          let list: string[]
+          if (typeof prop === 'function') {
+            list = await prop(mMatch[1])
+          } else {
+            const src = prop ?? DEFAULT_MENTIONS
+            list = src.filter(m => m.toLowerCase().startsWith(mMatch[1].toLowerCase()))
+          }
+          return {
+            suggestions: list.map(m => ({
+              label: `@${m}`,
+              kind:  monaco.languages.CompletionItemKind.User,
+              insertText: `\`@${m}\` `,
+              range,
+            })),
+          }
         }
+
+        // /slash
         const sMatch = before.match(/\/([\w]*)$/)
         if (sMatch) {
-          const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
-            startColumn: position.column - sMatch[0].length, endColumn: position.column }
-          return { suggestions: slashCommands
+          const range = {
+            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+            startColumn: position.column - sMatch[0].length, endColumn: position.column,
+          }
+          const cmds = slashCmdsRef.current
             .filter(c => c.label.toLowerCase().includes(sMatch[1].toLowerCase()))
-            .map(c => ({ label: c.label, kind: monaco.languages.CompletionItemKind.Snippet, insertText: c.insert, range })) }
+          return {
+            suggestions: cmds.map(c => ({
+              label:      c.label,
+              kind:       monaco.languages.CompletionItemKind.Snippet,
+              insertText: c.insert,
+              range,
+            })),
+          }
         }
+
         return { suggestions: [] }
       },
     })
 
-    // ── Slash key trigger ─────────────────────────────────────────────────
+    // Slash key → force trigger suggest widget
     editor.onKeyDown((e: any) => {
       if (e.browserEvent?.key === '/') {
         setTimeout(() => editor.trigger('keyboard', 'editor.action.triggerSuggest', {}), 50)
       }
     })
 
-    // ── Right-click context menu ──────────────────────────────────────────
+    // Right-click context menu
     editor.onContextMenu((e: any) => {
       const position = e.target?.position; if (!position) return
       e.event.preventDefault(); e.event.stopPropagation()
@@ -313,21 +447,25 @@ export default function AdvancedEditor({
 
       if (isTableLine(lines[lineIdx] ?? '')) {
         const { start, end } = getTableBounds(lines, lineIdx)
-        const isHeader  = lineIdx === start
-        const isSep     = isSepLine(lines[lineIdx])
-        setCtxMenu({ kind: 'table',
+        setCtxMenu({
+          kind: 'table',
           x: e.event.browserEvent.clientX, y: e.event.browserEvent.clientY,
           lineIdx, colIdx: colIndexAt(lines[lineIdx], position.column),
-          isHeader, isSep, isDataRow: !isHeader && !isSep,
-          tableStart: start, tableEnd: end })
+          isHeader: lineIdx === start,
+          isSep:    isSepLine(lines[lineIdx]),
+          isDataRow: lineIdx !== start && !isSepLine(lines[lineIdx]),
+          tableStart: start, tableEnd: end,
+        })
       } else {
-        setCtxMenu({ kind: 'slash',
+        setCtxMenu({
+          kind: 'slash',
           x: e.event.browserEvent.clientX, y: e.event.browserEvent.clientY,
-          lineNumber: position.lineNumber, column: position.column })
+          lineNumber: position.lineNumber, column: position.column,
+        })
       }
     })
 
-    // ── Scroll sync: editor → preview ─────────────────────────────────────
+    // Scroll sync: editor → preview
     editor.onDidScrollChange((e: any) => {
       if (modeRef.current !== 'both' || scrollSync.current) return
       const preview = previewRef.current; if (!preview) return
@@ -340,7 +478,7 @@ export default function AdvancedEditor({
     })
   }
 
-  // Preview scroll → editor sync
+  // Scroll sync: preview → editor
   const handlePreviewScroll = useCallback(() => {
     if (modeRef.current !== 'both' || scrollSync.current) return
     const preview = previewRef.current; if (!preview) return
@@ -354,18 +492,23 @@ export default function AdvancedEditor({
     requestAnimationFrame(() => { scrollSync.current = false })
   }, [])
 
-  // ── Table / slash action handler ──────────────────────────────────────────
+  // ── Table / slash context-menu actions ──────────────────────────────────────
 
-  const handleAction = useCallback((action: string) => {
+  const handleCtxAction = useCallback((action: string) => {
     const editor = monacoRef.current; if (!editor) return
     const monaco = monacoApiRef.current
     const model  = editor.getModel(); if (!model) return
 
     if (action.startsWith('slash:')) {
-      const cmd = slashCommands.find(c => c.label === action.slice(6)); if (!cmd) return
-      const pos = editor.getPosition(); if (!pos) return
-      editor.executeEdits('', [{ range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column), text: cmd.insert }])
-      editor.focus(); return
+      const label = action.slice(6)
+      const cmd   = slashCmdsRef.current.find(c => c.label === label); if (!cmd) return
+      const pos   = editor.getPosition(); if (!pos) return
+      editor.executeEdits('', [{
+        range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+        text:  cmd.insert,
+      }])
+      editor.focus()
+      return
     }
 
     if (!ctxMenu || ctxMenu.kind !== 'table') return
@@ -387,10 +530,10 @@ export default function AdvancedEditor({
       case 'col-delete':
         applyToTable(c => { if (c.length > 3) c.splice(colIdx + 1, 1); return c }); break
       case 'row-add-above': {
-        const b = '| ' + lines[lineIdx].split('|').slice(1,-1).map(()=>'   ').join(' | ') + ' |'
+        const b = '| ' + lines[lineIdx].split('|').slice(1,-1).map(() => '   ').join(' | ') + ' |'
         lines.splice(lineIdx, 0, b); break }
       case 'row-add-below': {
-        const b = '| ' + lines[lineIdx].split('|').slice(1,-1).map(()=>'   ').join(' | ') + ' |'
+        const b = '| ' + lines[lineIdx].split('|').slice(1,-1).map(() => '   ').join(' | ') + ' |'
         lines.splice(lineIdx + 1, 0, b); break }
       case 'row-delete':
         if (lineIdx > tableStart + 1) lines.splice(lineIdx, 1); break
@@ -401,11 +544,36 @@ export default function AdvancedEditor({
     model.setValue(lines.join('\n'))
   }, [ctxMenu])
 
-  // ── Merged Monaco options ─────────────────────────────────────────────────
+  // ── Custom toolbar action handler ────────────────────────────────────────────
 
-  const mergedOptions = useMemo(() => ({ ...DEFAULT_OPTIONS, ...options }), [options])
+  const handleToolbarAction = useCallback(async (idx: number) => {
+    const action = actions[idx]; if (!action) return
+    setLoadingSet(prev => new Set(prev).add(idx))
+    try {
+      const current = monacoRef.current?.getValue() ?? ''
+      const result  = await action.event(current)
+      if (typeof result === 'string') {
+        monacoRef.current?.setValue(result)
+        if (format === 'markdown') setMarkdown(result)
+        onChange(result)
+      }
+    } finally {
+      setLoadingSet(prev => {
+        const next = new Set(prev)
+        next.delete(idx)
+        return next
+      })
+    }
+  }, [actions, format, onChange])
 
-  // ── Preview pane ──────────────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────────────
+
+  const mergedOptions  = useMemo(() => ({ ...DEFAULT_OPTIONS, ...options }), [options])
+  const effectiveCmds  = slashCommandsProp ?? DEFAULT_SLASH_COMMANDS
+  const showModes      = format === 'markdown'
+  const showBar        = showModes || actions.length > 0
+
+  // ── Preview pane ─────────────────────────────────────────────────────────────
 
   const previewPane = useMemo(() => (
     <div
@@ -418,7 +586,7 @@ export default function AdvancedEditor({
     </div>
   ), [markdown, height, handlePreviewScroll])
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   if (format === 'markdown') {
     const isBoth = mode === 'both'
@@ -427,7 +595,11 @@ export default function AdvancedEditor({
         className={className}
         style={{ border: '1px solid #d0d7de', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
       >
-        <ModeBar mode={mode} onChange={setMode} />
+        <ModeBar
+          mode={mode} onMode={setMode}
+          actions={actions} loadingSet={loadingSet} onAction={handleToolbarAction}
+          showModes
+        />
 
         <div style={{ display: 'flex', flex: 1 }}>
           {(mode === 'edit' || isBoth) && (
@@ -453,21 +625,36 @@ export default function AdvancedEditor({
         </div>
 
         {ctxMenu && (
-          <ContextMenu menu={ctxMenu} onAction={handleAction} onClose={() => setCtxMenu(null)} />
+          <ContextMenu
+            menu={ctxMenu} cmds={effectiveCmds}
+            onAction={handleCtxAction} onClose={() => setCtxMenu(null)}
+          />
         )}
       </div>
     )
   }
 
+  // format="other" — plain code editor
   return (
-    <div className={className}>
+    <div
+      className={className}
+      style={showBar ? { border: '1px solid #d0d7de', borderRadius: 6, overflow: 'hidden' } : undefined}
+    >
+      {showBar && (
+        <ModeBar
+          mode={mode} onMode={setMode}
+          actions={actions} loadingSet={loadingSet} onAction={handleToolbarAction}
+          showModes={false}
+        />
+      )}
       <MonacoEditor
         height={height}
         language={language}
         theme={theme}
         value={value}
         onChange={handleEditorChange}
-        options={{ ...DEFAULT_OPTIONS, ...options }}
+        onMount={handleEditorMount}
+        options={mergedOptions}
       />
     </div>
   )

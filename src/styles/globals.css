@@ -461,6 +461,9 @@ body {
 }
 .table-overlay { pointer-events: none; }
 
+/* ── Toolbar spinner ── */
+@keyframes tb-spin { to { transform: rotate(360deg); } }
+
 /* ── ModeBar icon button tooltips ── */
 .tb-tip-host {
   position: relative;
