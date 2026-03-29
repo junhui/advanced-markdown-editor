@@ -538,7 +538,7 @@ export default function AdvancedEditor({
             suggestions: slashCmdsRef.current.map(c => ({
               label:      c.label,
               filterText: `/${c.label}`,
-              kind:       monaco.languages.CompletionItemKind.Snippet,
+              kind:       monaco.languages.CompletionItemKind.Keyword,
               insertText: c.insert,
               range,
             })),
