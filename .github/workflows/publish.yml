@@ -2,9 +2,8 @@ name: Build and Publish AdvancedEditor
 
 on:
   push:
-    branches:
-      - main
-      - claude/setup-editor-skeleton-Dg8hu
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
@@ -30,5 +29,8 @@ jobs:
       - name: Build
         run: npm run build:lib
 
-      - name: Publish to npm (OIDC provenance)
-        run: npm publish --provenance --access public
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
